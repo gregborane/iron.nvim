@@ -1,0 +1,232 @@
+From 568209311667bf777e1804ea18784d69a4578fea Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Mon, 2 Nov 2026 11:27:39 -0500
+Subject: [PATCH] Fix stale SIXEL rendering on current master
+
+---
+ README.md                |  5 ++-
+ lua/iron/sixel.lua       | 84 ++++++++++++++++++++++++++++++----------
+ tests/images/routing.lua | 27 +++++++++----
+ 3 files changed, 86 insertions(+), 30 deletions(-)
+
+diff --git a/README.md b/README.md
+index 7460a7a..ee1fa53 100644
+--- a/README.md
++++ b/README.md
+@@ -90,8 +90,9 @@ command. Iron reserves blank lines, anchors images in the buffer, and repaints
+ visible images after Neovim redraws. Only fully visible images are drawn;
+ partially scrolled or horizontally clipped images are hidden. Overlays are also
+ hidden while floating windows or completion menus are open. Resizing does not
+-rescale cached images: display them again. Erasing graphics relies on terminal
+-text erasure; terminal implementations differ, and redraws may flicker. This
++rescale cached images: display them again. Old graphics are explicitly erased before the TUI and images are repainted.
++Images are discarded if terminal output overwrites their reserved blank lines.
++Terminal implementations differ, and redraws may flicker. This
+ renderer is experimental and intended for Neovim's terminal UI, not GUI clients.
+ For tmux, enable `set -g allow-passthrough on`.
+ 
+diff --git a/lua/iron/sixel.lua b/lua/iron/sixel.lua
+index 0278bb9..2de6b19 100644
+--- a/lua/iron/sixel.lua
++++ b/lua/iron/sixel.lua
+@@ -4,8 +4,8 @@ local M = {}
+ local ns = vim.api.nvim_create_namespace("IronSixel")
+ local images = {}
+ local esc = string.char(27)
+-local queued, clearing = false, false
+-local previous = ""
++local queued, painting = false, false
++local previous_areas = {}
+ 
+ local function send(sequence)
+   if (vim.env.TMUX and vim.env.TMUX ~= "") or (vim.env.TERM or ""):match("^tmux") then
+@@ -18,6 +18,25 @@ local function send(sequence)
+   end
+ end
+ 
++local function reserved(buf, line, item)
++  if item.invalid then return false end
++  local lines = vim.api.nvim_buf_get_lines(buf, line, line + item.rows, false)
++  if #lines ~= item.rows then
++    if item.reserved then item.invalid = true end
++    return false
++  end
++  for _, text in ipairs(lines) do
++    -- Terminal updates may replace a marked line in place. An extmark alone
++    -- does not prove that the image's reservation still belongs to the image.
++    if text:find("%S") then
++      if item.reserved then item.invalid = true end
++      return false
++    end
++  end
++  item.reserved = true
++  return true
++end
++
+ local function placements()
+   local result = {}
+   -- Floating windows and popup menus can cover a normal window. Hide overlays
+@@ -31,7 +50,7 @@ local function placements()
+     local buf = vim.api.nvim_win_get_buf(win)
+     for _, item in ipairs(images[buf] or {}) do
+       local mark = vim.api.nvim_buf_get_extmark_by_id(buf, ns, item.mark, { details = true })
+-      if #mark > 0 and not mark[3].invalid then
++      if #mark > 0 and not mark[3].invalid and reserved(buf, mark[1], item) then
+         local first = vim.fn.screenpos(win, mark[1] + 1, 1)
+         local last = vim.fn.screenpos(win, mark[1] + item.rows, 1)
+         local info = vim.fn.getwininfo(win)[1]
+@@ -40,7 +59,9 @@ local function placements()
+         if first.row > 0 and last.row == first.row + item.rows - 1
+           and first.col + item.cols <= info.wincol + info.width
+           and last.row < info.winrow + info.height then
+-          result[#result + 1] = { row = first.row, col = first.col, item = item }
++          result[#result + 1] = { row = first.row, col = first.col, item = item, area = {
++            winrow = info.winrow, wincol = info.wincol, width = info.width, height = info.height,
++          } }
+         end
+       end
+     end
+@@ -48,24 +69,41 @@ local function placements()
+   return result
+ end
+ 
++local function erase(areas)
++  local seen, commands = {}, { esc .. "7", esc .. "[0m" }
++  for _, area in ipairs(areas) do
++    local key = ("%d:%d:%d:%d"):format(area.winrow, area.wincol, area.width, area.height)
++    if not seen[key] then
++      seen[key] = true
++      -- Clear the whole image-bearing window: terminal hardware scrolling may
++      -- have moved old pixels away from their last recorded image rectangle.
++      for row = area.winrow, math.min(vim.o.lines, area.winrow + area.height - 1) do
++        local width = math.min(area.width, vim.o.columns - area.wincol + 1)
++        if width > 0 then
++          commands[#commands + 1] = (esc .. "[%d;%dH" .. esc .. "[%dX"):format(row, area.wincol, width)
++        end
++      end
++    end
++  end
++  commands[#commands + 1] = esc .. "8"
++  send(table.concat(commands))
++end
++
+ local function paint()
+-  queued = false
+   local visible = placements()
+-  local keys = {}
+-  for _, p in ipairs(visible) do
+-    keys[#keys + 1] = ("%d:%d:%s"):format(p.row, p.col, tostring(p.item))
+-  end
+-  local key = table.concat(keys, ";")
+-  if key ~= previous then
+-    previous = key
+-    -- SIXEL has no delete command: erase old pixels by repainting the TUI.
+-    clearing = true
++  local areas = {}
++  for _, p in ipairs(visible) do areas[#areas + 1] = p.area end
++  if #previous_areas > 0 or #areas > 0 then
++    local clear = vim.list_extend(vim.deepcopy(previous_areas), areas)
++    erase(clear)
++    -- Explicit erasure damages text too, so restore the entire TUI before
++    -- painting images. Keep the reentrancy guard through the whole operation.
+     vim.cmd("redraw!")
+-    clearing = false
++    visible = placements()
+   end
++  previous_areas = {}
+   for _, p in ipairs(visible) do
+-    -- Save/restore cursor, DECSDM and private palette mode. Draw at the text
+-    -- cursor with image-local colors where the terminal supports mode 1070.
++    previous_areas[#previous_areas + 1] = p.area
+     send(esc .. "7" .. esc .. "[?80s" .. esc .. "[?80l"
+       .. esc .. "[?1070s" .. esc .. "[?1070h"
+       .. (esc .. "[%d;%dH"):format(p.row, p.col) .. p.item.data
+@@ -74,13 +112,19 @@ local function paint()
+ end
+ 
+ local function schedule()
+-  if queued or clearing then return end
++  if queued or painting then return end
+   queued = true
+-  vim.schedule(paint)
++  vim.schedule(function()
++    painting = true
++    local ok, err = pcall(paint)
++    painting = false
++    queued = false
++    if not ok then vim.notify("iron: SIXEL redraw failed: " .. tostring(err), vim.log.levels.WARN) end
++  end)
+ end
+ 
+ vim.api.nvim_set_decoration_provider(ns, {
+-  on_end = function() if next(images) or previous ~= "" then schedule() end end,
++  on_end = function() if next(images) or #previous_areas > 0 then schedule() end end,
+ })
+ 
+ function M.receive(buf, data, cols, rows, cursor, limit)
+diff --git a/tests/images/routing.lua b/tests/images/routing.lua
+index 94e95fa..0c7b070 100644
+--- a/tests/images/routing.lua
++++ b/tests/images/routing.lua
+@@ -3,6 +3,7 @@ vim.opt.runtimepath:prepend(vim.fn.getcwd())
+ vim.opt.termguicolors = true
+ vim.opt.swapfile = false
+ local image = require("iron.image")
++local protocol = arg[1] or "kitty"
+ local sent = {}
+ vim.api.nvim_ui_send = function(s) sent[#sent + 1] = s end
+ local function run(command, ipython)
+@@ -12,12 +13,15 @@ local function run(command, ipython)
+   local startup = vim.fn.tempname()
+   vim.fn.writefile({ "startup_kept = 42" }, startup)
+   local opts = { env = { PYTHONSTARTUP = startup } }
+-  command = image.prepare("python", command, opts, buf, { protocol = "kitty" })
++  command = image.prepare("python", command, opts, buf, { protocol = protocol })
+   assert(opts.env.PLOTLY_RENDERER == "browser")
+   local job = vim.fn.termopen(command, opts)
+   local function text() return table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n") end
+   local function wait_for(test)
+-    assert(vim.wait(15000, test, 10), text())
++    assert(vim.wait(15000, function()
++      if protocol == "sixel" then vim.cmd("redraw") end
++      return test()
++    end, 10), text())
+   end
+   wait_for(function() return text():find(ipython and "In [1]:" or ">>>", 1, true) end)
+   if not ipython then
+@@ -25,14 +29,21 @@ local function run(command, ipython)
+     wait_for(function() return text():find("STARTUP 42 False", 1, true) end)
+   end
+   vim.fn.chansend(job, "from PIL import Image; img = Image.new('CMYK', (120, 60), (0,255,255,0)); img.show()\n")
+-  wait_for(function() return table.concat(sent):find("a=p,U=1", 1, true) end)
++  wait_for(function() return table.concat(sent):find(protocol == "sixel" and string.char(27) .. "P0;1;0q" or "a=p,U=1", 1, true) end)
++  local function count_images()
++    if protocol == "sixel" then
++      local ns = vim.api.nvim_get_namespaces().IronSixel
++      return ns and #vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, {}) or 0
++    end
++    return select(2, table.concat(sent):gsub("a=p,U=1", ""))
++  end
+   if ipython then
+-    local count = #sent
++    local count = count_images()
+     vim.fn.chansend(job, "display(img.convert('RGB'))\n")
+-    wait_for(function() return #sent > count end)
+-    count = #sent
++    wait_for(function() return count_images() > count end)
++    count = count_images()
+     vim.fn.chansend(job, "img.convert('RGB')\n")
+-    wait_for(function() return #sent > count end)
++    wait_for(function() return count_images() > count end)
+   end
+   vim.fn.chansend(job, "import plotly.graph_objects as go; import plotly.io._base_renderers as br; br.open_html_in_browser = lambda html, *args, **kw: print('BROWSER', 'Plotly.newPlot' in html); pfig = go.Figure(go.Scatter(y=[1,3,2])); pfig.show()\n")
+   wait_for(function() return text():find("BROWSER True", 1, true) end)
+@@ -49,4 +60,4 @@ local function run(command, ipython)
+ end
+ run({ "python", "-q" }, false)
+ run({ "python", "-m", "IPython", "--simple-prompt", "--no-autoindent" }, true)
+-print("PASS: automatic Pillow inline output, Plotly browser routing, bare Plotly figures, startup preservation")
++print("PASS: " .. protocol .. ": automatic Pillow inline output, Plotly browser routing, bare Plotly figures, startup preservation")
+-- 
+2.51.1
+
