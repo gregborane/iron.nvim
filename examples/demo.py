@@ -93,3 +93,5 @@ display(fig)  # noqa: F821  # pyright: ignore[reportUndefinedVariable]
 # only show through plt.show() (display(fig) is an open decision)
 # %%
 
+# %%
+
