@@ -3,6 +3,7 @@ vim.opt.runtimepath:prepend(vim.fn.getcwd())
 vim.opt.termguicolors = true
 vim.opt.swapfile = false
 local image = require("iron.image")
+local protocol = arg[1] or "kitty"
 local sent = {}
 vim.api.nvim_ui_send = function(s) sent[#sent + 1] = s end
 local function run(command, ipython)
@@ -12,12 +13,15 @@ local function run(command, ipython)
   local startup = vim.fn.tempname()
   vim.fn.writefile({ "startup_kept = 42" }, startup)
   local opts = { env = { PYTHONSTARTUP = startup } }
-  command = image.prepare("python", command, opts, buf, { protocol = "kitty" })
+  command = image.prepare("python", command, opts, buf, { protocol = protocol })
   assert(opts.env.PLOTLY_RENDERER == "browser")
   local job = vim.fn.termopen(command, opts)
   local function text() return table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n") end
   local function wait_for(test)
-    assert(vim.wait(15000, test, 10), text())
+    assert(vim.wait(15000, function()
+      if protocol == "sixel" then vim.cmd("redraw") end
+      return test()
+    end, 10), text())
   end
   wait_for(function() return text():find(ipython and "In [1]:" or ">>>", 1, true) end)
   if not ipython then
@@ -25,14 +29,21 @@ local function run(command, ipython)
     wait_for(function() return text():find("STARTUP 42 False", 1, true) end)
   end
   vim.fn.chansend(job, "from PIL import Image; img = Image.new('CMYK', (120, 60), (0,255,255,0)); img.show()\n")
-  wait_for(function() return table.concat(sent):find("a=p,U=1", 1, true) end)
+  wait_for(function() return table.concat(sent):find(protocol == "sixel" and string.char(27) .. "P0;1;0q" or "a=p,U=1", 1, true) end)
+  local function count_images()
+    if protocol == "sixel" then
+      local ns = vim.api.nvim_get_namespaces().IronSixel
+      return ns and #vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, {}) or 0
+    end
+    return select(2, table.concat(sent):gsub("a=p,U=1", ""))
+  end
   if ipython then
-    local count = #sent
+    local count = count_images()
     vim.fn.chansend(job, "display(img.convert('RGB'))\n")
-    wait_for(function() return #sent > count end)
-    count = #sent
+    wait_for(function() return count_images() > count end)
+    count = count_images()
     vim.fn.chansend(job, "img.convert('RGB')\n")
-    wait_for(function() return #sent > count end)
+    wait_for(function() return count_images() > count end)
   end
   vim.fn.chansend(job, "import plotly.graph_objects as go; import plotly.io._base_renderers as br; br.open_html_in_browser = lambda html, *args, **kw: print('BROWSER', 'Plotly.newPlot' in html); pfig = go.Figure(go.Scatter(y=[1,3,2])); pfig.show()\n")
   wait_for(function() return text():find("BROWSER True", 1, true) end)
@@ -49,4 +60,4 @@ local function run(command, ipython)
 end
 run({ "python", "-q" }, false)
 run({ "python", "-m", "IPython", "--simple-prompt", "--no-autoindent" }, true)
-print("PASS: automatic Pillow inline output, Plotly browser routing, bare Plotly figures, startup preservation")
+print("PASS: " .. protocol .. ": automatic Pillow inline output, Plotly browser routing, bare Plotly figures, startup preservation")

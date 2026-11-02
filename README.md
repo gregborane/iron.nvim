@@ -90,8 +90,9 @@ command. Iron reserves blank lines, anchors images in the buffer, and repaints
 visible images after Neovim redraws. Only fully visible images are drawn;
 partially scrolled or horizontally clipped images are hidden. Overlays are also
 hidden while floating windows or completion menus are open. Resizing does not
-rescale cached images: display them again. Erasing graphics relies on terminal
-text erasure; terminal implementations differ, and redraws may flicker. This
+rescale cached images: display them again. Old graphics are explicitly erased before the TUI and images are repainted.
+Images are discarded if terminal output overwrites their reserved blank lines.
+Terminal implementations differ, and redraws may flicker. This
 renderer is experimental and intended for Neovim's terminal UI, not GUI clients.
 For tmux, enable `set -g allow-passthrough on`.
 
