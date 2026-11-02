@@ -112,6 +112,7 @@ class Images(unittest.TestCase):
         shell = TerminalInteractiveShell.instance()
         old_types = list(shell.display_formatter.active_types)
         original = shell.display_pub.publish
+        original_hook = shell.displayhook.write_format_data
         iron_image.load_ipython_extension(shell)
         try:
             output = self.capture(lambda: shell.run_cell(
@@ -125,6 +126,7 @@ class Images(unittest.TestCase):
             iron_image.unload_ipython_extension(shell)
         self.assertEqual(shell.display_formatter.active_types, old_types)
         self.assertEqual(shell.display_pub.publish, original)
+        self.assertEqual(shell.displayhook.write_format_data, original_hook)
 
     def test_jupyter_png_mime_transport(self):
         from jupyter_console.ptshell import ZMQTerminalInteractiveShell

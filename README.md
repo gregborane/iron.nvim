@@ -95,6 +95,40 @@ text erasure; terminal implementations differ, and redraws may flicker. This
 renderer is experimental and intended for Neovim's terminal UI, not GUI clients.
 For tmux, enable `set -g allow-passthrough on`.
 
+### Static images inline, interactive figures in your browser
+
+Image-enabled REPLs automatically route output by type:
+
+| Call | Destination |
+| --- | --- |
+| Matplotlib `plt.show()` | Static plot inside the REPL |
+| Pillow `image.show()` | Static image inside the REPL, including CMYK images |
+| Pillow `display(image)` / bare image in IPython | Static image inside the REPL |
+| Plotly `figure.show()` | Interactive chart in the default browser |
+| Bare Plotly figure in IPython/Jupyter | Interactive chart in the default browser |
+
+No helper imports are needed. Pillow and Plotly are optional: install them in
+**the Python environment running the REPL/kernel** when using those features.
+Interactive Plotly output needs neither Kaleido nor a Chrome installation for
+image export; it uses your default browser and embeds Plotly's JavaScript.
+Explicit `renderer=` arguments or a configured `PLOTLY_RENDERER` override this
+default. An ordinary Python REPL still prints a text representation for bare
+objects; use `.show()` there.
+
+Plain Python uses a bundled `PYTHONSTARTUP`, then runs your original startup
+file in the usual interactive namespace. IPython uses its Iron extension.
+New Jupyter kernels receive that extension as a kernel argument. Existing
+Python kernels require `%load_ext iron_image` once, with Iron's `python/`
+directory on their import path. If the extension was already loaded, use
+`%reload_ext iron_image`. Restart existing REPLs after updating Iron.
+
+The browser opens on the machine running Python. Remote kernels need their own
+browser/display arrangement; this is not browser forwarding. Static PNG MIME
+output from remote kernels continues to render in the local console.
+
+This routing does not add `:IronImageOpen` or a Matplotlib Qt window. See
+[`examples/images.py`](examples/images.py) for a demo matching these behaviors.
+
 ### Jupyter-console
 
 `jupyter-console` also supports `image = true`. Install `jupyter-console` and
@@ -119,8 +153,9 @@ Iron installs a frontend PNG handler through a bundled Jupyter base config,
 preserving existing `JUPYTER_CONFIG_PATH` entries and console config files,
 including `--config`. It selects Matplotlib's inline backend for newly launched
 Python kernels. The frontend converts PNG MIME messages into the same scrollback
-transport used by the Python/IPython REPLs; no Iron extension is needed inside
-the kernel. Console config must not replace `callable_image_handler` when using
+transport used by the Python/IPython REPLs; plain PNG MIME output needs no Iron
+extension inside the kernel. The extension enables Pillow `.show()` and browser
+routing. Console config must not replace `callable_image_handler` when using
 Iron's renderer.
 
 To connect to an existing kernel, use

@@ -128,6 +128,16 @@ function M.prepare(ft, command, opts, bufnr, settings)
     for i, arg in ipairs(cmd) do if arg == "--" then index = i; break end end
     table.insert(cmd, index, '--ZMQTerminalInteractiveShell.mime_preference=["image/png"]')
     table.insert(cmd, index, "--ZMQTerminalInteractiveShell.image_handler=callable")
+    local existing = false
+    for _, arg in ipairs(cmd) do
+      if arg == "--existing" or arg:match("^%-%-existing=") then existing = true end
+    end
+    if not existing then
+      -- Arguments after -- belong to the new kernel, not the console. Repeated
+      -- extension options append, preserving other user-supplied extensions.
+      if not vim.tbl_contains(cmd, "--") then table.insert(cmd, "--") end
+      table.insert(cmd, "--IPKernelApp.extensions=iron_image")
+    end
   end
   settings = type(settings) == "table" and settings or {}
   local protocol = settings.protocol or "kitty"
@@ -167,6 +177,15 @@ function M.prepare(ft, command, opts, bufnr, settings)
   else
     env.MPLBACKEND = "module://iron_image_backend"
   end
+  if python and not ipython and not jupyter then
+    local startup = vim.fn.fnamemodify(paths[1], ":h") .. "/iron_image_startup.py"
+    local previous = env.PYTHONSTARTUP or vim.env.PYTHONSTARTUP
+    if previous ~= startup then env.IRON_IMAGE_PYTHONSTARTUP = previous end
+    env.PYTHONSTARTUP = startup
+  end
+  -- Plotly reads this lazily on import; do not require Plotly just to start a
+  -- REPL. Explicit user renderer choices remain available as overrides.
+  env.PLOTLY_RENDERER = env.PLOTLY_RENDERER or vim.env.PLOTLY_RENDERER or "browser"
   env.IRON_IMAGE_PROTOCOL = protocol
   env.IRON_IMAGE_CELL_WIDTH = tostring(cell_width)
   env.IRON_IMAGE_CELL_HEIGHT = tostring(cell_height)

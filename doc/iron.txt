@@ -145,6 +145,22 @@ supported. tmux requires allow-passthrough. The same Python, IPython and
 Jupyter-console display hooks and max_images limit apply. Sixel conversion is
 limited to 16 million source pixels and 12 MiB of encoded output per image.
 
+Static and interactive routing:
+  - Matplotlib plt.show(): inline static plot.
+  - Pillow Image.show(): inline static image (CMYK is converted to RGBA).
+  - Plotly Figure.show(): interactive chart in the default browser.
+  - Bare Plotly expressions in IPython/Jupyter: default browser.
+
+Pillow and Plotly are optional dependencies in the REPL/kernel environment.
+Interactive Plotly output does not need Kaleido. PLOTLY_RENDERER defaults to
+browser; an explicit environment value or renderer= argument overrides it.
+Plain Python startup preserves and executes the previous PYTHONSTARTUP file.
+IPython and newly launched Jupyter Python kernels load the Iron extension.
+Existing Python kernels need %load_ext iron_image (or %reload_ext iron_image),
+with Iron's python directory on their import path. Browsers open on the kernel
+machine, not through a remote console. Restart the REPL after updating Iron.
+This feature does not implement :IronImageOpen or Matplotlib Qt windows.
+
 Jupyter-console also supports inline images:
 >lua
   python = {

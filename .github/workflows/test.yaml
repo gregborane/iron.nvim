@@ -60,5 +60,5 @@ jobs:
       - name: Run image transport tests
         run: |
           export PATH="$HOME/.local/bin:$PATH"
-          python -m pip install matplotlib ipython jupyter-console ipykernel
+          python -m pip install matplotlib pillow plotly ipython jupyter-console ipykernel
           make test-images

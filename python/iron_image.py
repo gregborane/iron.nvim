@@ -8,6 +8,7 @@ Pillow to encode images and reserves blank lines for Neovim-managed overlays.
 
 import base64
 import itertools
+import io
 import os
 import shutil
 import sys
@@ -22,6 +23,8 @@ DIACRITICS = (
 _ids = itertools.count(1)
 _lock = threading.RLock()
 _extensions = {}
+_pillow_viewer = None
+_startup_installed = False
 MAX_PNG_BYTES = 12 * 1024 * 1024
 
 
@@ -115,10 +118,63 @@ def display_jupyter(data):
     return True
 
 
+def install_pillow():
+    """Prefer inline output for Image.show(), without requiring Pillow."""
+    global _pillow_viewer
+    if _pillow_viewer is not None:
+        return
+    try:
+        from PIL import ImageShow
+    except ModuleNotFoundError as error:
+        if error.name == "PIL":
+            return
+        raise
+
+    class InlineViewer(ImageShow.Viewer):
+        def show(self, image, **options):
+            output = io.BytesIO()
+            # PNG cannot represent modes such as CMYK. Preserve alpha and do
+            # not modify the caller's image or fall back to an external viewer.
+            image.convert("RGBA").save(output, format="PNG")
+            display(output.getvalue())
+            return True
+
+    _pillow_viewer = InlineViewer()
+    ImageShow.register(_pillow_viewer, order=0)
+
+
+def configure_browser():
+    """Select Plotly's default-browser renderer without importing Plotly."""
+    renderer = os.environ.setdefault("PLOTLY_RENDERER", "browser")
+    loaded = sys.modules.get("plotly.io")
+    if loaded is not None:
+        loaded.renderers.default = renderer
+
+
+def run_startup(namespace):
+    """Install hooks, then execute the user's original Python startup file."""
+    global _startup_installed
+    install_pillow()
+    configure_browser()
+    _startup_installed = True
+    startup = os.environ.get("IRON_IMAGE_PYTHONSTARTUP")
+    if startup:
+        try:
+            with open(startup, "rb") as source:
+                code = compile(source.read(), startup, "exec")
+            exec(code, namespace)
+        except Exception:
+            # Match Python's normal startup behavior: report errors, keep REPL.
+            import traceback
+            traceback.print_exc()
+
+
 def load_ipython_extension(shell):
     """Render IPython PNG display data while preserving its normal text output."""
     if id(shell) in _extensions:
         return
+    install_pillow()
+    configure_browser()
     original = shell.display_pub.publish
     active_types = list(shell.display_formatter.active_types)
     shell.display_formatter.active_types = list(dict.fromkeys(active_types + ["image/png"]))
@@ -133,11 +189,30 @@ def load_ipython_extension(shell):
                 print(str(error), file=sys.stderr)
         return original(data, metadata=metadata, **kwargs)
 
-    shell.display_pub.publish = publish
-    _extensions[id(shell)] = (original, active_types)
+    # Kernels must keep publishing MIME messages to their frontend. Wrapping
+    # their publisher would recurse through display() back into publish().
+    original_hook = None
+    if shell.__class__.__name__ != "ZMQInteractiveShell":
+        shell.display_pub.publish = publish
+        original_hook = shell.displayhook.write_format_data
+
+        def write_format_data(data, md_dict=None):
+            if not display_jupyter(data):
+                return original_hook(data, md_dict)
+
+        shell.displayhook.write_format_data = write_format_data
+    _extensions[id(shell)] = (original, active_types, original_hook)
 
 
 def unload_ipython_extension(shell):
+    global _pillow_viewer
     previous = _extensions.pop(id(shell), None)
     if previous:
-        shell.display_pub.publish, shell.display_formatter.active_types = previous
+        shell.display_pub.publish, shell.display_formatter.active_types = previous[:2]
+        if previous[2] is not None:
+            shell.displayhook.write_format_data = previous[2]
+    if not _extensions and not _startup_installed and _pillow_viewer is not None:
+        from PIL import ImageShow
+        if _pillow_viewer in ImageShow._viewers:
+            ImageShow._viewers.remove(_pillow_viewer)
+        _pillow_viewer = None
