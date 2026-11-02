@@ -52,6 +52,32 @@ class Images(unittest.TestCase):
         self.assertIn(f"\x1b[38;2;{image_id >> 16};{image_id >> 8 & 255};{image_id & 255}m", text)
         self.assertIn(iron_image.PLACEHOLDER + iron_image.DIACRITICS[0] * 2, text)
 
+    def test_sixel_transport_reserves_blank_lines(self):
+        with patch.dict(os.environ, {"IRON_IMAGE_PROTOCOL": "sixel"}):
+            text = self.capture(lambda: iron_image.display(png_bytes()))
+        chunks = re.findall(r"iron-image;(\d+);(\d+);(\d+);(\d+);([01]);([^\x07]+)\x07", text)
+        data = base64.b64decode("".join(chunk[5] for chunk in chunks))
+        self.assertTrue(data.startswith(b'\x1bP0;1;0q"1;1;2;2'))
+        self.assertTrue(data.endswith(b"\x1b\\"))
+        self.assertNotIn(iron_image.PLACEHOLDER, text)
+        self.assertEqual(text.count("\r\n"), int(chunks[0][2]))
+
+    def test_jupyter_sixel_mime(self):
+        with patch.dict(os.environ, {"IRON_IMAGE_PROTOCOL": "sixel"}):
+            output = self.capture(lambda: self.assertTrue(iron_image.display_jupyter(
+                {"image/png": base64.b64encode(png_bytes()).decode("ascii")}
+            )))
+        self.assertIn("iron-image;", output)
+        self.assertNotIn(iron_image.PLACEHOLDER, output)
+
+    def test_sixel_encoder_pixels_and_partial_band(self):
+        from iron_sixel import encode
+        data = encode(png_bytes(5, 7), 80, 160).decode()
+        self.assertIn('#0;2;100;0;0', data)
+        self.assertIn('#0!5~$-#0!5@$' , data)
+        small = encode(png_bytes(100, 50), 20, 20)
+        self.assertIn(b'"1;1;20;10', small)
+
     def test_invalid_png_does_not_emit_output(self):
         output = io.StringIO()
         with redirect_stdout(output), self.assertRaises(ValueError):

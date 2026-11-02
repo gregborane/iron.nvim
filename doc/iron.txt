@@ -127,6 +127,24 @@ The transport adds no Python dependencies; install matplotlib or IPython only
 if using those features. No image.nvim, Kitty executable, Jupyter, or pynvim is
 needed. Existing PYTHONPATH entries and REPL environment settings are preserved.
 
+Sixel is available as an explicit alternative (image=true still selects Kitty):
+>lua
+  image = { protocol = "sixel", max_images = 100,
+            cell_width = 8, cell_height = 16 }
+<
+Requires a Sixel-capable terminal and Pillow in the Python REPL/frontend.
+cell_width and cell_height are terminal character dimensions in pixels (integers
+1-64). Match them to the terminal font and restart the REPL after changes.
+Sixel preserves aspect ratio, uses 256 colors, and composites alpha on white.
+Images are anchored to reserved blank lines and repainted after TUI redraws.
+Only fully visible images are drawn; clipped images and overlays covered by
+floating windows or popup menus are hidden. Redisplay after resizing. This
+experimental TUI renderer relies on terminal text erasure to clear graphics;
+redraws may flicker and terminal implementations differ. GUI clients are not
+supported. tmux requires allow-passthrough. The same Python, IPython and
+Jupyter-console display hooks and max_images limit apply. Sixel conversion is
+limited to 16 million source pixels and 12 MiB of encoded output per image.
+
 Jupyter-console also supports inline images:
 >lua
   python = {

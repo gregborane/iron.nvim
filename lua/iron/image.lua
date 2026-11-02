@@ -1,5 +1,5 @@
--- Inline PNG transport for terminal REPLs. Uploads bypass the embedded terminal;
--- Unicode placeholders travel through it and therefore follow its scrollback.
+-- Inline image transport for terminal REPLs. Graphics bypass the embedded
+-- terminal; Kitty placeholders or SIXEL buffer anchors track scrollback.
 local M = {}
 local sessions = {}
 local esc = string.char(27)
@@ -26,13 +26,14 @@ function M.detach(bufnr)
   local session = sessions[bufnr]
   if not session then return end
   sessions[bufnr] = nil
+  if session.protocol == "sixel" then require("iron.sixel").detach(bufnr) end
   for _, id in ipairs(session.images) do
     pcall(delete, id)
   end
   vim.api.nvim_clear_autocmds({ group = group, buffer = bufnr })
 end
 
-local function receive(session, sequence)
+local function receive(session, sequence, cursor)
   -- TermRequest omits the OSC terminator. Accept it as well for direct callers.
   sequence = sequence:gsub("\7$", ""):gsub(esc .. "\\$", "")
   local id, cols, rows, part, more, chunk = sequence:match(
@@ -49,7 +50,7 @@ local function receive(session, sequence)
   if part == 0 then
     -- IDs are never reused: old scrollback must not start displaying a new PNG.
     if id <= session.last_id then return end
-    session.pending = { id = id, cols = cols, rows = rows, chunks = {} }
+    session.pending = { id = id, cols = cols, rows = rows, chunks = {}, cursor = cursor }
   end
   local pending = session.pending
   if not pending or pending.id ~= id or pending.cols ~= cols or pending.rows ~= rows
@@ -62,6 +63,13 @@ local function receive(session, sequence)
   session.pending = nil
   local payload = table.concat(pending.chunks)
   local ok, png = pcall(vim.base64.decode, payload)
+  if session.protocol == "sixel" then
+    if not ok or not png:match("^" .. esc .. 'P0;1;0q[0-9;!#$"%-?-~]+' .. esc .. "\\$") then return end
+    if require("iron.sixel").receive(session.bufnr, png, cols, rows, pending.cursor, session.max_images) then
+      session.last_id = id
+    end
+    return
+  end
   if not ok or #png < 24 or png:sub(1, 8) ~= "\137PNG\r\n\26\n" or png:sub(13, 16) ~= "IHDR" then
     return
   end
@@ -122,6 +130,16 @@ function M.prepare(ft, command, opts, bufnr, settings)
     table.insert(cmd, index, "--ZMQTerminalInteractiveShell.image_handler=callable")
   end
   settings = type(settings) == "table" and settings or {}
+  local protocol = settings.protocol or "kitty"
+  if protocol ~= "kitty" and protocol ~= "sixel" then
+    error("iron: image.protocol must be kitty or sixel")
+  end
+  local cell_width, cell_height = settings.cell_width or 8, settings.cell_height or 16
+  for _, size in ipairs({ cell_width, cell_height }) do
+    if type(size) ~= "number" or size % 1 ~= 0 or size < 1 or size > 64 then
+      error("iron: image cell_width/cell_height must be integers from 1 to 64")
+    end
+  end
   local max_images = settings.max_images or 100
   if type(max_images) ~= "number" or max_images < 1 or max_images > 1000 or max_images % 1 ~= 0 then
     error("iron: image.max_images must be an integer from 1 to 1000")
@@ -134,7 +152,7 @@ function M.prepare(ft, command, opts, bufnr, settings)
     if not used[candidate] then namespace = candidate; break end
   end
   if not namespace then error("iron: too many image-enabled REPLs") end
-  local session = { namespace = namespace, images = {}, last_id = 0, max_images = max_images }
+  local session = { protocol = protocol, bufnr = bufnr, namespace = namespace, images = {}, last_id = 0, max_images = max_images }
   sessions[bufnr] = session
   local env = vim.tbl_extend("force", {}, opts.env or {})
   local pythonpath = env.PYTHONPATH or vim.env.PYTHONPATH or ""
@@ -149,6 +167,9 @@ function M.prepare(ft, command, opts, bufnr, settings)
   else
     env.MPLBACKEND = "module://iron_image_backend"
   end
+  env.IRON_IMAGE_PROTOCOL = protocol
+  env.IRON_IMAGE_CELL_WIDTH = tostring(cell_width)
+  env.IRON_IMAGE_CELL_HEIGHT = tostring(cell_height)
   env.IRON_IMAGE_NAMESPACE = tostring(namespace)
   env.PYTHON_BASIC_REPL = env.PYTHON_BASIC_REPL or "1"
   opts.env = env
@@ -157,7 +178,7 @@ function M.prepare(ft, command, opts, bufnr, settings)
     callback = function(args)
       local sequence = args.data and args.data.sequence or ""
       if sequence:sub(1, 16) ~= esc .. "]51;iron-image;" then return end
-      local ok, err = pcall(receive, session, sequence)
+      local ok, err = pcall(receive, session, sequence, args.data.cursor)
       if not ok then vim.notify("iron: image rendering failed: " .. tostring(err), vim.log.levels.WARN) end
     end,
   })

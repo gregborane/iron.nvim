@@ -10,4 +10,7 @@ test:
 test-images:
 	python -m unittest discover -s tests/images -p 'test_*.py'
 	nvim --headless -u NONE -l tests/images/integration.lua
+	nvim --headless -u NONE -l tests/images/sixel.lua
+	nvim --headless -u NONE -l tests/images/sixel.lua ipython
+	nvim --headless -u NONE -l tests/images/sixel.lua jupyter
 	nvim --headless -u NONE -l tests/images/jupyter.lua

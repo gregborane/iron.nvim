@@ -64,6 +64,37 @@ The REPL receives a bundled Matplotlib backend through `MPLBACKEND`. A later
 bundled extension also handles PNG MIME output from `IPython.display.display`,
 including `%matplotlib inline` when that backend is installed.
 
+### Sixel terminals
+
+Select Sixel explicitly in the same Python REPL definition (Kitty remains the
+default for `image = true`):
+
+```lua
+image = {
+  protocol = "sixel",
+  max_images = 100,
+  cell_width = 8,   -- actual terminal character width in pixels
+  cell_height = 16, -- actual terminal character height in pixels
+},
+```
+
+Requires a Sixel-capable terminal and Pillow in the REPL/frontend Python
+environment (`python -m pip install Pillow`; Matplotlib already depends on it).
+Python, IPython and Jupyter-console use the same display hooks. Restart the REPL
+after changing protocol or cell dimensions. Set cell dimensions to match your
+terminal font; incorrect values can make images overlap adjacent text.
+
+Sixel uses up to 256 colors, preserves aspect ratio, and composites transparency
+on white. Unlike Kitty, Sixel has no Unicode placeholders or image deletion
+command. Iron reserves blank lines, anchors images in the buffer, and repaints
+visible images after Neovim redraws. Only fully visible images are drawn;
+partially scrolled or horizontally clipped images are hidden. Overlays are also
+hidden while floating windows or completion menus are open. Resizing does not
+rescale cached images: display them again. Erasing graphics relies on terminal
+text erasure; terminal implementations differ, and redraws may flicker. This
+renderer is experimental and intended for Neovim's terminal UI, not GUI clients.
+For tmux, enable `set -g allow-passthrough on`.
+
 ### Jupyter-console
 
 `jupyter-console` also supports `image = true`. Install `jupyter-console` and
@@ -106,7 +137,7 @@ from iron_image import display
 display("plot.png")  # also accepts PNG bytes and objects with _repr_png_()
 ```
 
-Images follow the terminal text when scrolling. Their cell dimensions are fixed
+With the default Kitty protocol, images follow the terminal text when scrolling. Their cell dimensions are fixed
 when emitted, using a box of up to 80 columns and 20 rows (at most half the
 terminal height); display the image again after resizing the REPL. The latest 100
 images per REPL are retained; `image = { max_images = 200 }` changes this limit

@@ -1,8 +1,9 @@
-"""Inline PNGs for Iron's Python REPL. The transport needs only the stdlib.
+"""Inline PNGs for Iron's Python REPL. Kitty transport needs only the stdlib.
 
 Like pyrepl.nvim, images use Kitty virtual placements and Unicode placeholders.
 Iron forwards bounded OSC messages through Neovim's TermRequest event, avoiding
-an RPC client, temporary image files, or a Kitty executable.
+an RPC client, temporary image files, or a Kitty executable. SIXEL mode uses
+Pillow to encode images and reserves blank lines for Neovim-managed overlays.
 """
 
 import base64
@@ -60,7 +61,18 @@ def display(image):
     # Use the reference IPython renderer's fixed bounding box.
     cols = max(1, min(terminal.columns - 3, 80))
     rows = max(1, min(terminal.lines // 2, 20))
-    payload = base64.b64encode(png).decode("ascii")
+    protocol = os.environ.get("IRON_IMAGE_PROTOCOL", "kitty")
+    if protocol not in ("kitty", "sixel"):
+        raise ValueError("iron: unknown image protocol")
+    data = png
+    if protocol == "sixel":
+        from iron_sixel import encode
+        cell_width = int(os.environ.get("IRON_IMAGE_CELL_WIDTH", "8"))
+        cell_height = int(os.environ.get("IRON_IMAGE_CELL_HEIGHT", "16"))
+        data = encode(png, cols * cell_width, rows * cell_height)
+        if len(data) > MAX_PNG_BYTES:
+            raise ValueError("iron: SIXEL exceeds the 12 MiB image limit")
+    payload = base64.b64encode(data).decode("ascii")
     with _lock:
         serial = next(_ids)
         if serial >= 65536:
@@ -72,6 +84,11 @@ def display(image):
             chunk = payload[offset:offset + 4096]
             more = int(offset + len(chunk) < len(payload))
             out.write(f"\x1b]51;iron-image;{image_id};{cols};{rows};{part};{more};{chunk}\x07")
+        if protocol == "sixel":
+            # Reserve real terminal lines; Neovim anchors the overlay at the OSC.
+            out.write(("\r" + " " * cols + "\r\n") * rows)
+            out.flush()
+            return
         color = f"\x1b[38;2;{image_id >> 16};{(image_id >> 8) & 255};{image_id & 255}m"
         padding = " " * max(0, (terminal.columns - cols) // 2)
         for row in range(rows):
