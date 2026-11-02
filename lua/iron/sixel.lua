@@ -10,13 +10,25 @@ local esc = string.char(27)
 local queued, painting = false, false
 local painted = false
 
-local function send(sequence)
-  if (vim.env.TMUX and vim.env.TMUX ~= "") or (vim.env.TERM or ""):match("^tmux") then
-    sequence = esc .. "Ptmux;" .. sequence:gsub(esc, esc .. esc) .. esc .. "\\"
+local prefix = esc .. "7" .. esc .. "[?80s" .. esc .. "[?80l"
+  .. esc .. "[?1070s" .. esc .. "[?1070h"
+local suffix = esc .. "[?1070r" .. esc .. "[?80r" .. esc .. "8"
+
+local function send(p, tmux)
+  local item = p.item
+  -- Payloads are immutable. Keep just the last placement per image so routine
+  -- redraws neither copy the bitmap nor scan it again for tmux escaping.
+  -- A single-entry cache bounds memory even as windows are opened and moved.
+  if item.row ~= p.row or item.col ~= p.col or item.tmux ~= tmux then
+    local sequence = prefix .. (esc .. "[%d;%dH"):format(p.row, p.col) .. item.data .. suffix
+    if tmux then
+      sequence = esc .. "Ptmux;" .. sequence:gsub(esc, esc .. esc) .. esc .. "\\"
+    end
+    item.sequence, item.row, item.col, item.tmux = sequence, p.row, p.col, tmux
   end
   -- Queue graphics on the same UI stream as the preceding clear/repaint.
   -- Direct stderr writes can overtake the TUI and be erased by its redraw.
-  vim.api.nvim_ui_send(sequence)
+  vim.api.nvim_ui_send(item.sequence)
 end
 
 local function reserved(buf, line, item)
@@ -49,12 +61,14 @@ local function placements()
   end
   for _, win in ipairs(wins) do
     local buf = vim.api.nvim_win_get_buf(win)
+    local info
     for _, item in ipairs(images[buf] or {}) do
-      local mark = vim.api.nvim_buf_get_extmark_by_id(buf, ns, item.mark, { details = true })
-      if #mark > 0 and not mark[3].invalid and reserved(buf, mark[1], item) then
+      local mark = not item.invalid
+        and vim.api.nvim_buf_get_extmark_by_id(buf, ns, item.mark, { details = true })
+      if mark and #mark > 0 and not mark[3].invalid and reserved(buf, mark[1], item) then
         local first = vim.fn.screenpos(win, mark[1] + 1, 1)
         local last = vim.fn.screenpos(win, mark[1] + item.rows, 1)
-        local info = vim.fn.getwininfo(win)[1]
+        info = info or vim.fn.getwininfo(win)[1]
         -- Only whole, unwrapped rectangles are painted. A clipped image must
         -- never overflow into another split, a statusline, or the command line.
         if first.row > 0 and last.row == first.row + item.rows - 1
@@ -80,11 +94,10 @@ local function paint()
     visible = placements()
   end
   painted = #visible > 0
+  local tmux = (vim.env.TMUX ~= nil and vim.env.TMUX ~= "")
+    or (vim.env.TERM or ""):match("^tmux") ~= nil
   for _, p in ipairs(visible) do
-    send(esc .. "7" .. esc .. "[?80s" .. esc .. "[?80l"
-      .. esc .. "[?1070s" .. esc .. "[?1070h"
-      .. (esc .. "[%d;%dH"):format(p.row, p.col) .. p.item.data
-      .. esc .. "[?1070r" .. esc .. "[?80r" .. esc .. "8")
+    send(p, tmux)
   end
 end
 

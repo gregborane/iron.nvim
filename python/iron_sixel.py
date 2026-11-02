@@ -1,6 +1,14 @@
 """Bounded SIXEL encoder. Pillow is imported only when SIXEL is selected."""
 import io
-import itertools
+import re
+
+
+_SIXEL_CHARS = bytes.maketrans(bytes(range(64)), bytes(range(63, 127)))
+_RUNS = re.compile(r"(.)\1{3,}")
+
+
+def _repeat(match):
+    return f"!{len(match[0])}{match[1]}"
 
 
 def encode(png, width, height):
@@ -26,19 +34,25 @@ def encode(png, width, height):
         rgb = palette[color * 3:color * 3 + 3]
         output.append(f'#{color};2;' + ';'.join(str(round(v * 100 / 255)) for v in rgb))
     for top in range(0, height, 6):
-        bands = {}
+        # Palette indices are bytes: direct indexing avoids a dictionary lookup
+        # and membership test for every pixel. Allocate only colors in this band.
+        bands = [None] * 256
+        used = []
         for y in range(top, min(top + 6, height)):
-            for x in range(width):
-                color = pixels[y * width + x]
-                if color not in bands:
-                    bands[color] = bytearray(width)
-                bands[color][x] |= 1 << (y - top)
-        for color, band in sorted(bands.items()):
+            bit = 1 << (y - top)
+            offset = y * width
+            for x, color in enumerate(pixels[offset:offset + width]):
+                band = bands[color]
+                if band is None:
+                    band = bands[color] = bytearray(width)
+                    used.append(color)
+                band[x] |= bit
+        for color in sorted(used):
             output.append(f'#{color}')
-            for value, group in itertools.groupby(bytes(band).rstrip(b'\0')):
-                count = sum(1 for _ in group)
-                char = chr(63 + value)
-                output.append(f'!{count}{char}' if count > 3 else char * count)
+            # Translate and scan runs in C, avoiding Python work for each zero
+            # column (especially costly with many sparse color planes).
+            chars = bands[color].rstrip(b'\0').translate(_SIXEL_CHARS).decode('ascii')
+            output.append(_RUNS.sub(_repeat, chars))
             output.append('$')
         if top + 6 < height:
             output.append('-')
