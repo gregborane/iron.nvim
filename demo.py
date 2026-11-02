@@ -91,3 +91,5 @@ go.Figure(go.Pie(labels=["x", "y", "z"], values=[3, 2, 1]))
 display(fig)  # noqa: F821  # pyright: ignore[reportUndefinedVariable]
 # expect (ipython): text "<Figure size ... with 1 Axes>" — matplotlib figures
 # only show through plt.show() (display(fig) is an open decision)
+# %%
+
