@@ -1,21 +1,22 @@
 -- SIXEL has no image IDs or text placeholders. Keep buffer anchors and repaint
 -- visible images after the TUI redraws. Never write SIXEL to the embedded PTY.
+if type(vim.api.nvim_ui_send) ~= "function" then
+  error("iron: SIXEL requires Neovim 0.12+ (nvim_ui_send) for ordered terminal redraws")
+end
 local M = {}
 local ns = vim.api.nvim_create_namespace("IronSixel")
 local images = {}
 local esc = string.char(27)
 local queued, painting = false, false
-local previous_areas = {}
+local painted = false
 
 local function send(sequence)
   if (vim.env.TMUX and vim.env.TMUX ~= "") or (vim.env.TERM or ""):match("^tmux") then
     sequence = esc .. "Ptmux;" .. sequence:gsub(esc, esc .. esc) .. esc .. "\\"
   end
-  if type(vim.api.nvim_ui_send) == "function" then
-    vim.api.nvim_ui_send(sequence)
-  else
-    vim.api.nvim_chan_send(vim.v.stderr, sequence)
-  end
+  -- Queue graphics on the same UI stream as the preceding clear/repaint.
+  -- Direct stderr writes can overtake the TUI and be erased by its redraw.
+  vim.api.nvim_ui_send(sequence)
 end
 
 local function reserved(buf, line, item)
@@ -59,9 +60,7 @@ local function placements()
         if first.row > 0 and last.row == first.row + item.rows - 1
           and first.col + item.cols <= info.wincol + info.width
           and last.row < info.winrow + info.height then
-          result[#result + 1] = { row = first.row, col = first.col, item = item, area = {
-            winrow = info.winrow, wincol = info.wincol, width = info.width, height = info.height,
-          } }
+          result[#result + 1] = { row = first.row, col = first.col, item = item }
         end
       end
     end
@@ -69,41 +68,19 @@ local function placements()
   return result
 end
 
-local function erase(areas)
-  local seen, commands = {}, { esc .. "7", esc .. "[0m" }
-  for _, area in ipairs(areas) do
-    local key = ("%d:%d:%d:%d"):format(area.winrow, area.wincol, area.width, area.height)
-    if not seen[key] then
-      seen[key] = true
-      -- Clear the whole image-bearing window: terminal hardware scrolling may
-      -- have moved old pixels away from their last recorded image rectangle.
-      for row = area.winrow, math.min(vim.o.lines, area.winrow + area.height - 1) do
-        local width = math.min(area.width, vim.o.columns - area.wincol + 1)
-        if width > 0 then
-          commands[#commands + 1] = (esc .. "[%d;%dH" .. esc .. "[%dX"):format(row, area.wincol, width)
-        end
-      end
-    end
-  end
-  commands[#commands + 1] = esc .. "8"
-  send(table.concat(commands))
-end
-
 local function paint()
   local visible = placements()
-  local areas = {}
-  for _, p in ipairs(visible) do areas[#areas + 1] = p.area end
-  if #previous_areas > 0 or #areas > 0 then
-    local clear = vim.list_extend(vim.deepcopy(previous_areas), areas)
-    erase(clear)
-    -- Explicit erasure damages text too, so restore the entire TUI before
-    -- painting images. Keep the reentrancy guard through the whole operation.
-    vim.cmd("redraw!")
+  if painted or #visible > 0 then
+    -- :redraw! only invalidates the editor's grid. It does not invalidate the
+    -- TUI's cached cells, so raw ECH erasure leaves unchanged text invisible.
+    -- :mode requests UPD_CLEAR: Neovim clears its terminal and repaints its
+    -- complete grid, keeping the physical screen and both caches consistent.
+    -- Do not erase terminal text ourselves. Hold the guard during the repaint.
+    vim.cmd("mode")
     visible = placements()
   end
-  previous_areas = {}
+  painted = #visible > 0
   for _, p in ipairs(visible) do
-    previous_areas[#previous_areas + 1] = p.area
     send(esc .. "7" .. esc .. "[?80s" .. esc .. "[?80l"
       .. esc .. "[?1070s" .. esc .. "[?1070h"
       .. (esc .. "[%d;%dH"):format(p.row, p.col) .. p.item.data
@@ -124,7 +101,7 @@ local function schedule()
 end
 
 vim.api.nvim_set_decoration_provider(ns, {
-  on_end = function() if next(images) or #previous_areas > 0 then schedule() end end,
+  on_end = function() if next(images) or painted then schedule() end end,
 })
 
 function M.receive(buf, data, cols, rows, cursor, limit)

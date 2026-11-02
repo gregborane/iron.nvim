@@ -132,7 +132,9 @@ Sixel is available as an explicit alternative (image=true still selects Kitty):
   image = { protocol = "sixel", max_images = 100,
             cell_width = 8, cell_height = 16 }
 <
-Requires a Sixel-capable terminal and Pillow in the Python REPL/frontend.
+Requires Neovim 0.12+ (nvim_ui_send), a Sixel-capable terminal and Pillow in
+the Python REPL/frontend. Neovim owns the full terminal clear and repaint;
+Sixel output follows it on the same ordered UI stream. Kitty supports 0.11+.
 cell_width and cell_height are terminal character dimensions in pixels (integers
 1-64). Match them to the terminal font and restart the REPL after changes.
 Sixel preserves aspect ratio, uses 256 colors, and composites alpha on white.

@@ -78,7 +78,7 @@ image = {
 },
 ```
 
-Requires a Sixel-capable terminal and Pillow in the REPL/frontend Python
+Requires Neovim 0.12+ (`nvim_ui_send`), a Sixel-capable terminal, and Pillow in the REPL/frontend Python
 environment (`python -m pip install Pillow`; Matplotlib already depends on it).
 Python, IPython and Jupyter-console use the same display hooks. Restart the REPL
 after changing protocol or cell dimensions. Set cell dimensions to match your
@@ -90,7 +90,10 @@ command. Iron reserves blank lines, anchors images in the buffer, and repaints
 visible images after Neovim redraws. Only fully visible images are drawn;
 partially scrolled or horizontally clipped images are hidden. Overlays are also
 hidden while floating windows or completion menus are open. Resizing does not
-rescale cached images: display them again. Old graphics are explicitly erased before the TUI and images are repainted.
+rescale cached images: display them again. Neovim performs a full terminal clear and repaint before images are redrawn;
+Iron does not erase the REPL text behind Neovim's display cache. Graphics use
+the same ordered UI stream as that repaint; the racy stderr fallback is not
+supported for Sixel. Kitty continues to support Neovim 0.11+.
 Images are discarded if terminal output overwrites their reserved blank lines.
 Terminal implementations differ, and redraws may flicker. This
 renderer is experimental and intended for Neovim's terminal UI, not GUI clients.
@@ -445,3 +448,17 @@ repl_open_cmd = view.offset{
   h_offset = view.helpers.flip(2)
 }
 ```
+
+### Testing the Sixel terminal redraw
+
+The terminal regression test uses a real Neovim TUI in a pseudo-terminal and
+checks that text and prompts survive image redraws and cleanup. It requires
+POSIX, Neovim 0.12+ on PATH (or the `NVIM` environment variable), and the test-only
+`pyte` Python package:
+
+```sh
+python -m unittest discover -s tests/images -p test_tui_redraw.py
+```
+
+This checks terminal text output and clear/image ordering. It does not emulate
+Foot's bitmap renderer or replace visual testing in Foot.

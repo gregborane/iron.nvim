@@ -144,6 +144,9 @@ function M.prepare(ft, command, opts, bufnr, settings)
   if protocol ~= "kitty" and protocol ~= "sixel" then
     error("iron: image.protocol must be kitty or sixel")
   end
+  if protocol == "sixel" and type(vim.api.nvim_ui_send) ~= "function" then
+    error("iron: SIXEL requires Neovim 0.12+ (nvim_ui_send) for ordered terminal redraws")
+  end
   local cell_width, cell_height = settings.cell_width or 8, settings.cell_height or 16
   for _, size in ipairs({ cell_width, cell_height }) do
     if type(size) ~= "number" or size % 1 ~= 0 or size < 1 or size > 64 then
