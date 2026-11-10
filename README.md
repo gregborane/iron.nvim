@@ -24,289 +24,61 @@ vim.pack.add({
 }
 ```
 
-## How to configure
+### REPL config for this fork
 
-### Inline images in Python REPLs
-
-Enable `image = true` in your Python REPL definition to display Matplotlib plots
-and PNG images **inside the REPL scrollback** on Ghostty or Kitty. This requires
-Neovim 0.11+ and `termguicolors`. The image transport uses only Neovim and Python's
-standard library: no `image.nvim`, Kitty executable, Jupyter kernel, or RPC
-package is required. Matplotlib and IPython are needed only when you use them.
+Please refer to the original project [iron.nvim](https://github.com/Vigemus/iron.nvim/) for full configuration
 
 ```lua
-vim.opt.termguicolors = true
-require("iron.core").setup({
-  config = {
-    repl_definition = {
-      python = {
-        command = { "python3" }, -- or { "ipython", "--no-autoindent" }
-        format = require("iron.fts.common").bracketed_paste_python,
-        image = true,
-      },
-    },
-    repl_open_cmd = require("iron.view").bottom(20),
-  },
+vim.pack.add({
+  { src = "https://github.com/gregborane/iron.nvim" },
 })
-```
 
-Restart an existing REPL after enabling this setting. Send this code normally:
-
-```python
-import matplotlib.pyplot as plt
-plt.plot([1, 2, 3], [1, 4, 9])
-plt.show()
-```
-
-The REPL receives a bundled Matplotlib backend through `MPLBACKEND`. A later
-`matplotlib.use(...)` or `%matplotlib` changes that backend; use
-`matplotlib.use("module://iron_image_backend")` to restore it. In IPython, the
-bundled extension also handles PNG MIME output from `IPython.display.display`,
-including `%matplotlib inline` when that backend is installed.
-
-### Sixel terminals
-
-Select Sixel explicitly in the same Python REPL definition (Kitty remains the
-default for `image = true`):
-
-```lua
-image = {
-  protocol = "sixel",
-  max_images = 100,
-  cell_width = 8,   -- actual terminal character width in pixels
-  cell_height = 16, -- actual terminal character height in pixels
-},
-```
-
-Requires Neovim 0.12+ (`nvim_ui_send`), a Sixel-capable terminal, and Pillow in the REPL/frontend Python
-environment (`python -m pip install Pillow`; Matplotlib already depends on it).
-Python, IPython and Jupyter-console use the same display hooks. Restart the REPL
-after changing protocol or cell dimensions. Set cell dimensions to match your
-terminal font; incorrect values can make images overlap adjacent text.
-
-Sixel uses up to 256 colors, preserves aspect ratio, and composites transparency
-on white. Unlike Kitty, Sixel has no Unicode placeholders or image deletion
-command. Iron reserves blank lines, anchors images in the buffer, and repaints
-visible images after Neovim redraws. Only fully visible images are drawn;
-partially scrolled or horizontally clipped images are hidden. Overlays are also
-hidden while floating windows or completion menus are open. Resizing does not
-rescale cached images: display them again. Neovim performs a full terminal clear and repaint before images are redrawn;
-Iron does not erase the REPL text behind Neovim's display cache. Graphics use
-the same ordered UI stream as that repaint; the racy stderr fallback is not
-supported for Sixel. Kitty continues to support Neovim 0.11+.
-Images are discarded if terminal output overwrites their reserved blank lines.
-Terminal implementations differ, and redraws may flicker. This
-renderer is experimental and intended for Neovim's terminal UI, not GUI clients.
-For tmux, enable `set -g allow-passthrough on`.
-
-### Static images inline, interactive figures in your browser
-
-Image-enabled REPLs automatically route output by type:
-
-| Call | Destination |
-| --- | --- |
-| Matplotlib `plt.show()` | Static plot inside the REPL |
-| Pillow `image.show()` | Static image inside the REPL, including CMYK images |
-| Pillow `display(image)` / bare image in IPython | Static image inside the REPL |
-| Plotly `figure.show()` | Interactive chart in the default browser |
-| Bare Plotly figure in IPython/Jupyter | Interactive chart in the default browser |
-
-No helper imports are needed. Pillow and Plotly are optional: install them in
-**the Python environment running the REPL/kernel** when using those features.
-Interactive Plotly output needs neither Kaleido nor a Chrome installation for
-image export; it uses your default browser and embeds Plotly's JavaScript.
-Explicit `renderer=` arguments or a configured `PLOTLY_RENDERER` override this
-default. An ordinary Python REPL still prints a text representation for bare
-objects; use `.show()` there.
-
-Plain Python uses a bundled `PYTHONSTARTUP`, then runs your original startup
-file in the usual interactive namespace. IPython uses its Iron extension.
-New Jupyter kernels receive that extension as a kernel argument. Existing
-Python kernels require `%load_ext iron_image` once, with Iron's `python/`
-directory on their import path. If the extension was already loaded, use
-`%reload_ext iron_image`. Restart existing REPLs after updating Iron.
-
-The browser opens on the machine running Python. Remote kernels need their own
-browser/display arrangement; this is not browser forwarding. Static PNG MIME
-output from remote kernels continues to render in the local console.
-
-This routing does not add `:IronImageOpen` or a Matplotlib Qt window. See
-[`examples/images.py`](examples/images.py) for a demo matching these behaviors.
-
-### Jupyter-console
-
-`jupyter-console` also supports `image = true`. Install `jupyter-console` and
-`ipykernel` in your Python environment, plus Matplotlib for plots:
-
-```lua
-python = {
-  command = { "jupyter-console" },
-  format = require("iron.fts.common").bracketed_paste,
-  image = true,
-  block_dividers = { "# %%", "#%%" },
-},
-```
-
-The built-in definition is `require("iron.fts.python").jupyter`. Launches through
-`jupyter console`, `python -m jupyter_console`, and `python -m jupyter console`
-work too. `bracketed_paste_python` recognizes these commands and sends the entire
-cell as one paste, preserving blank lines. Keep the normal prompt-toolkit prompt;
-Jupyter-console's `--simple-prompt` does not support multiline pastes.
-
-Iron installs a frontend PNG handler through a bundled Jupyter base config,
-preserving existing `JUPYTER_CONFIG_PATH` entries and console config files,
-including `--config`. It selects Matplotlib's inline backend for newly launched
-Python kernels. The frontend converts PNG MIME messages into the same scrollback
-transport used by the Python/IPython REPLs; plain PNG MIME output needs no Iron
-extension inside the kernel. The extension enables Pillow `.show()` and browser
-routing. Console config must not replace `callable_image_handler` when using
-Iron's renderer.
-
-To connect to an existing kernel, use
-`command = { "jupyter-console", "--existing", "/path/to/kernel.json" }`.
-For plots, run `%matplotlib inline` in that kernel. Existing kernels keep their
-environment and backend; Iron renders the PNG MIME output they publish.
-
-### Direct PNG output and limits
-
-To display a PNG directly in Python, IPython, or a local Jupyter Python kernel:
-
-```python
-from iron_image import display
-display("plot.png")  # also accepts PNG bytes and objects with _repr_png_()
-```
-
-With the default Kitty protocol, images follow the terminal text when scrolling. Their cell dimensions are fixed
-when emitted, using a box of up to 80 columns and 20 rows (at most half the
-terminal height); display the image again after resizing the REPL. The latest 100
-images per REPL are retained; `image = { max_images = 200 }` changes this limit
-(1–1000). Evicted images leave blank placeholder cells in older scrollback.
-Deleting the REPL buffer or exiting Neovim releases its terminal images.
-
-Only PNG is transported, with a 12 MiB limit per image. Use a local `python`,
-`python3`, `ipython`, or Jupyter-console frontend (including module launches).
-Existing and remote Jupyter kernels need only publish PNG MIME output; use
-`IPython.display.display` in kernels that do not have Iron's modules available.
-Shell wrappers and Python `-I`/`-E` are not supported by the automatic setup.
-For tmux, enable `set -g allow-passthrough on`; the outer terminal must support
-Kitty Unicode placeholders. Other REPL definitions are unaffected.
-
-The rendering approach is inspired by
-[pyrepl.nvim](https://github.com/gregborane/pyrepl.nvim): upload PNGs to the outer
-terminal and send matching Unicode placeholders through Neovim's REPL terminal.
-
-### General configuration
-
-Below is a very simple configuration for iron:
-
-```lua
+vim.opt.termguicolors = true
 local iron = require("iron.core")
 local view = require("iron.view")
 local common = require("iron.fts.common")
 
-iron.setup {
+iron.setup({
   config = {
-    -- Whether a repl should be discarded or not
     scratch_repl = true,
-    -- Your repl definitions come here
+    close_window_on_exit = false,
     repl_definition = {
       sh = {
-        -- Can be a table or a function that
-        -- returns a table (see below)
-        command = {"zsh"}
+        command = { "sh" },
       },
       python = {
-        command = { "python3" },  -- or { "ipython", "--no-autoindent" }
-        format = common.bracketed_paste_python,
+        command = { "jupyter-console" },
+        format = common.bracketed_paste,
+        image = {
+          protocol = "sixel",
+          cell_width = 8,
+          cell_height = 16,
+        },
         block_dividers = { "# %%", "#%%" },
-        env = {PYTHON_BASIC_REPL = "1"} --this is needed for python3.13 and up.
-      }
+        env = { PYTHON_BASIC_REPL = "1" },
+      },
     },
-    -- set the file type of the newly created repl to ft
-    -- bufnr is the buffer id of the REPL and ft is the filetype of the 
-    -- language being used for the REPL. 
     repl_filetype = function(bufnr, ft)
       return ft
-      -- or return a string name such as the following
-      -- return "iron"
     end,
-    -- Send selections to the DAP repl if an nvim-dap session is running.
     dap_integration = true,
-    -- How the repl window will be displayed
-    -- See below for more information
-    repl_open_cmd = view.bottom(40),
-
-    -- repl_open_cmd can also be an array-style table so that multiple 
-    -- repl_open_commands can be given.
-    -- When repl_open_cmd is given as a table, the first command given will
-    -- be the command that `IronRepl` initially toggles.
-    -- Moreover, when repl_open_cmd is a table, each key will automatically
-    -- be available as a keymap (see `keymaps` below) with the names 
-    -- toggle_repl_with_cmd_1, ..., toggle_repl_with_cmd_k
-    -- For example,
-    -- 
-    -- repl_open_cmd = {
-    --   view.split.vertical.rightbelow("%40"), -- cmd_1: open a repl to the right
-    --   view.split.rightbelow("%25")  -- cmd_2: open a repl below
-    -- }
-
+    repl_open_cmd = view.split.vertical.rightbelow("%40"),
   },
-  -- Iron doesn't set keymaps by default anymore.
-  -- You can set them here or manually add keymaps to the functions in iron.core
-  keymaps = {
-    toggle_repl = "<space>rr", -- toggles the repl open and closed.
-    -- If repl_open_command is a table as above, then the following keymaps are
-    -- available
-    -- toggle_repl_with_cmd_1 = "<space>rv",
-    -- toggle_repl_with_cmd_2 = "<space>rh",
-    restart_repl = "<space>rR", -- calls `IronRestart` to restart the repl
-    send_motion = "<space>sc",
-    visual_send = "<space>sc",
-    send_file = "<space>sf",
-    send_line = "<space>sl",
-    send_paragraph = "<space>sp",
-    send_until_cursor = "<space>su",
-    send_mark = "<space>sm",
-    send_code_block = "<space>sb",
-    send_code_block_and_move = "<space>sn",
-    mark_motion = "<space>mc",
-    mark_visual = "<space>mc",
-    remove_mark = "<space>md",
-    cr = "<space>s<cr>",
-    interrupt = "<space>s<space>",
-    exit = "<space>sq",
-    clear = "<space>cl",
-  },
-  -- If the highlight is on, you can change how it looks
-  -- For the available options, check nvim_set_hl
   highlight = {
-    italic = true
+    italic = true,
   },
-  ignore_blank_lines = true, -- ignore blank lines when sending visual select lines
-}
+})
 
--- iron also has a list of commands, see :h iron-commands for all available commands
-vim.keymap.set('n', '<space>rf', '<cmd>IronFocus<cr>')
-vim.keymap.set('n', '<space>rh', '<cmd>IronHide<cr>')
+vim.keymap.set("n", "<space>rf", "<cmd>IronFocus<cr>")
+vim.keymap.set("n", "<space>rr", "<cmd>IronRestart<cr>")
+vim.keymap.set("n", "<space>ro", "<cmd>IronRepl<cr>")
+vim.keymap.set("n", "<space>rh", "<cmd>IronHide<cr>")
+vim.keymap.set("n", "<space>rq", "<cmd>IronQuit<cr>")
+vim.keymap.set("n", "<space>rc", "<cmd>IronClear<cr>")
+vim.keymap.set("n", "<space>x", "<cmd>IronExecCell<cr>")
+vim.keymap.set("n", "<space>rx", "<cmd>IronInterupt<cr>")
 ```
 
-The repl `command` can also be a function:
-
-```lua
-iron.setup{
-  config = {
-    repl_definition = {
-      -- custom repl that loads the current file
-      haskell = {
-        command = function(meta)
-          local filename = vim.api.nvim_buf_get_name(meta.current_bufnr)
-          return { 'cabal', 'v2-repl', filename}
-        end
-      }
-    },
-  },
-}
-```
 
 ### REPL windows
 
@@ -320,61 +92,7 @@ to make it simpler:
 
 ```lua
 local view = require("iron.view")
-
--- iron.setup {...
-
--- One can always use the default commands from vim directly
-repl_open_cmd = "vertical botright 80 split"
-
--- But iron provides some utility functions to allow you to declare that dynamically,
--- based on editor size or custom logic, for example.
-
--- Vertical 50 columns split
--- Split has a metatable that allows you to set up the arguments in a "fluent" API
--- you can write as you would write a vim command.
--- It accepts:
---   - vertical
---   - leftabove/aboveleft
---   - rightbelow/belowright
---   - topleft
---   - botright
--- They'll return a metatable that allows you to set up the next argument
--- or call it with a size parameter
-repl_open_cmd = view.split.vertical.botright(50)
-
--- If the supplied number is a fraction between 1 and 0,
--- it will be used as a proportion
-repl_open_cmd = view.split.vertical.botright(0.61903398875)
-
--- The size parameter can be a number, a string or a function.
--- When it's a *number*, it will be the size in rows/columns
--- If it's a *string*, it requires a "%" sign at the end and is calculated
--- as a percentage of the editor size
--- If it's a *function*, it should return a number for the size of rows/columns
-
 repl_open_cmd = view.split("40%")
-
--- You can supply custom logic
--- to determine the size of your
--- repl's window
-repl_open_cmd = view.split.topleft(function()
-  if some_check then
-    return vim.o.lines * 0.4
-  end
-  return 20
-end)
-
--- An optional set of options can be given to the split function if one
--- wants to configure the window behavior.
--- Note that, by default `winfixwidth` and `winfixheight` are set
--- to `true`. If you want to overwrite those values,
--- you need to specify the keys in the option map as the example below
-
-repl_open_cmd = view.split("40%", {
-  winfixwidth = false,
-  winfixheight = false,
-  -- any window-local configuration can be used here
-  number = true
 })
 ```
 
@@ -385,80 +103,11 @@ If you prefer floats, the API is the following:
 ```lua
 local view = require("iron.view")
 
--- iron.setup {...
-
--- The same size arguments are valid for float functions
-repl_open_cmd = view.top("10%")
-
--- `view.center` takes either one or two arguments
-repl_open_cmd = view.center("30%", 20)
-
--- If you supply only one, it will be used for both dimensions
--- The function takes an argument to whether the orientation is vertical(true) or
--- horizontal (false)
-repl_open_cmd = view.center(function(vertical)
--- Useless function, but it will be called twice,
--- once for each dimension (width, height)
-  if vertical then
-    return 50
-  end
-  return 20
-end)
-
--- `view.offset` allows you to control both the size of each dimension and
--- the distance of them from the top-left corner of the screen
 repl_open_cmd = view.offset{
   width = 60,
   height = vim.o.height * 0.75
   w_offset = 0,
   h_offset = "5%"
 }
-
--- Some helper functions allow you to calculate the offset
--- in relation to the size of the window.
--- While all other sizing functions take only the orientation boolean (vertical or not),
--- for offsets, the functions will also take the repl size in that dimension
--- as argument. The helper functions then return a function that takes two arguments
--- to calculate the offset
-repl_open_cmd = view.offset{
-  width = 60,
-  height = vim.o.height * 0.75
-  -- `view.helpers.flip` will subtract the size of the REPL
-  -- window from the total dimension, then apply an offset.
-  -- Effectively, it flips the top/left to bottom/right orientation
-  w_offset = view.helpers.flip(2),
-  -- `view.helpers.proportion` allows you to apply a relative
-  -- offset considering the REPL window size.
-  -- for example, 0.5 will centralize the REPL in that dimension,
-  -- 0 will pin it to the top/left and 1 will pin it to the bottom/right.
-  h_offset = view.helpers.proportion(0.5)
-}
-
--- Differently from `view.center`, all arguments are required
--- and no defaults will be applied if something is missing.
-repl_open_cmd = view.offset{
-  width = 60,
-  height = vim.o.height * 0.75
-  -- Since we know we're using this function in the width offset
-  -- calculation, we can ignore the argument
-  w_offset = function(_, repl_size)
-    -- Ideally this function calculates a value based on something..
-    return 42
-  end,
-  h_offset = view.helpers.flip(2)
-}
 ```
 
-### Testing the Sixel terminal redraw
-
-The terminal regression test uses a real Neovim TUI in a pseudo-terminal and
-checks that text and prompts survive image redraws and cleanup. It requires
-POSIX, Neovim 0.12+ on PATH (or the `NVIM` environment variable), and the test-only
-`pyte` Python package:
-
-```sh
-python -m unittest discover -s tests/images -p test_tui_redraw.py
-```
-
-This checks terminal text output and clear/image ordering. It does not emulate
-Foot's bitmap renderer or replace visual testing in Foot.
