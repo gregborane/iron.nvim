@@ -500,7 +500,7 @@ local line_starts_with_block_divider = function(line, block_dividers)
   end
 end
 
---- Sends lines between two block dividers.
+--- Sends the code inside the block under the cursor, excluding marker lines.
 -- Block dividers can be defined as table in the
 -- repl_definition under key block_dividers.
 -- The buffer is scanned from cursor till first line
@@ -511,36 +511,46 @@ end
 -- If move is true, the cursor is moved to the next block_divider
 -- for jumping through the code. If move is false, the cursor is
 -- not moved.
-core.send_code_block = function(move)
-  local block_dividers = config.repl_definition[vim.bo[0].filetype].block_dividers
-  if block_dividers == nil then
+core.send_code_block = function(move, block_divider)
+  local repl_def = config.repl_definition[vim.bo[0].filetype]
+  local block_dividers = block_divider and { block_divider } or repl_def and repl_def.block_dividers
+  if not block_dividers or #block_dividers == 0 then
     error("No block_dividers defined for this repl in repl_definition!")
   end
   local linenr = vim.api.nvim_win_get_cursor(0)[1] - 1
   local buffer_text = vim.api.nvim_buf_get_lines(0, 0, -1, false)
   local mark_start = linenr
-  while mark_start ~= 0 do
-    local line_text = buffer_text[mark_start + 1]
-    if line_starts_with_block_divider(line_text, block_dividers) then break end
+  while mark_start >= 0 and not line_starts_with_block_divider(buffer_text[mark_start + 1], block_dividers) do
     mark_start = mark_start - 1
   end
+  mark_start = mark_start + 1
   local buffer_length = vim.api.nvim_buf_line_count(0)
   local mark_end = linenr + 1
-  while mark_end < buffer_length do
-    local line_text = buffer_text[mark_end + 1]
-    if line_starts_with_block_divider(line_text, block_dividers) then break end
+  while mark_end < buffer_length and not line_starts_with_block_divider(buffer_text[mark_end + 1], block_dividers) do
     mark_end = mark_end + 1
   end
   mark_end = mark_end - 1
-  local col_end = string.len(buffer_text[mark_end + 1]) - 1
+  if mark_start > mark_end then return end
   marks.set {
     from_line = mark_start,
     from_col = 0,
     to_line = mark_end,
-    to_col = col_end,
+    to_col = vim.fn.strwidth(buffer_text[mark_end + 1]) - 1,
   }
   core.send_mark()
   if move then vim.api.nvim_win_set_cursor(0, { math.min(mark_end + 2, buffer_length), 0 }) end
+  return true
+end
+
+core.send_code_block_with_marker = function(move)
+  local repl_def = config.repl_definition[vim.bo[0].filetype]
+  local block_dividers = repl_def and repl_def.block_dividers
+  if not block_dividers or #block_dividers == 0 then
+    error("No block_dividers defined for this repl in repl_definition!")
+  end
+  vim.ui.select(block_dividers, { prompt = "Select code cell marker:" }, function(marker)
+    if marker then core.send_code_block(move, marker) end
+  end)
 end
 
 --- Attaches a buffer to a repl regardless of it's filetype
@@ -711,6 +721,7 @@ local named_maps = {
   visual_send = { { 'v' }, core.visual_send },
   send_paragraph = { { 'n' }, core.send_paragraph },
   send_code_block = { { 'n' }, function() core.send_code_block(false) end },
+  send_code_block_with_marker = { { 'n' }, function() core.send_code_block_with_marker(false) end },
   send_code_block_and_move = {
     { 'n' }, function() core.send_code_block(true) end
   },
